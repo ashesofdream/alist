@@ -69,6 +69,13 @@ type S3 struct {
 	Port   int  `json:"port" env:"PORT"`
 	SSL    bool `json:"ssl" env:"SSL"`
 }
+type ProxyCache struct {
+	Path             string `json:"path" env:"PATH"`
+	FileDiffStrategy string `json:"file_diff_strategy" env:"FILE_DIFF_STRATEGY"`
+	MaxSize          int64  `json:"max_size" env:"MAX_SIZE"`
+	MatchPattern     string `json:"match_pattern" env:"MATCH_PATTERN"`
+	// LazyQueryTime    int //>0,query modified time only when (now - last) > lazyQueryTime
+}
 
 type Config struct {
 	Force                 bool        `json:"force" env:"FORCE"`
@@ -89,6 +96,7 @@ type Config struct {
 	Tasks                 TasksConfig `json:"tasks" envPrefix:"TASKS_"`
 	Cors                  Cors        `json:"cors" envPrefix:"CORS_"`
 	S3                    S3          `json:"s3" envPrefix:"S3_"`
+	ProxyCache            ProxyCache  `json:"proxy_cache" envPrefix:"PROXY_CACHE_"`
 }
 
 func DefaultConfig() *Config {
@@ -96,6 +104,7 @@ func DefaultConfig() *Config {
 	indexDir := filepath.Join(flags.DataDir, "bleve")
 	logPath := filepath.Join(flags.DataDir, "log/log.log")
 	dbPath := filepath.Join(flags.DataDir, "data.db")
+	proxyCacheDir := filepath.Join(flags.DataDir, "proxy_cache")
 	return &Config{
 		Scheme: Scheme{
 			Address:    "0.0.0.0",
@@ -154,6 +163,12 @@ func DefaultConfig() *Config {
 			Enable: false,
 			Port:   5246,
 			SSL:    false,
+		},
+		ProxyCache: ProxyCache{
+			Path:             proxyCacheDir,
+			FileDiffStrategy: "UpdateWhenModified",
+			MaxSize:          1024 * 1024 * 1024,
+			MatchPattern:     `(?i)\.(png|jpg|jpeg|webp|gif|bmp|tiff|svg|heic|ico)$`,
 		},
 	}
 }

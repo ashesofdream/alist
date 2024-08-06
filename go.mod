@@ -74,6 +74,7 @@ require (
 
 require (
 	github.com/BurntSushi/toml v0.3.1 // indirect
+	github.com/ashesofdream/go-disklrucache v0.0.0-20240806043427-67420dd102e8 // indirect
 	github.com/blevesearch/go-faiss v1.0.19 // indirect
 	github.com/blevesearch/zapx/v16 v16.1.4 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect

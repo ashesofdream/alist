@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alist-org/alist/v3/internal/proxycache"
 	"github.com/alist-org/alist/v3/internal/stream"
 
 	"github.com/alist-org/alist/v3/internal/errs"
@@ -250,8 +251,15 @@ func (h *Handler) handleGetHeadPost(w http.ResponseWriter, r *http.Request) (sta
 		if storage.GetStorage().ProxyRange {
 			common.ProxyRange(link, fi.GetSize())
 		}
-		err = common.Proxy(w, r, link, fi)
+		if link.MFile == nil {
+			link.MFile, _ = proxycache.GetCacheFile(storage, fi, link)
+		}
+		fmt.Printf("%s\n", reqPath)
+		warpWriter, _ := proxycache.WrapHttpWriter(w,r, storage, fi, link)
+		err = common.Proxy(warpWriter, r, link, fi)
+		warpWriter.Close()
 		if err != nil {
+			proxycache.RemoveCache(storage, fi)
 			log.Errorf("webdav proxy error: %+v", err)
 			return http.StatusInternalServerError, err
 		}
