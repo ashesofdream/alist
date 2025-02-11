@@ -201,12 +201,15 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 
 	var gatherError error
 	gatherContext, gatherCancel := context.WithCancel(ctx)
+	gatherWg := sync.WaitGroup{}
+	gatherWg.Add(1)
 	go func() {
 		log.Infof("gather worker start")
 		defer log.Infof("gather worker end")
 		total := stream.GetSize()
 		left := total
 		var partReturn *PartReturn
+		defer gatherWg.Done()
 		for true {
 			select {
 			case rtn := <-partReturnChannel:
@@ -251,7 +254,8 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 		}
 		_, err := io.ReadFull(tempFile, bytes)
 		if err != nil {
-			return err
+			gatherError = err
+			break
 		}
 		left -= int64(len(bytes))
 		log.Debugf("left: %d", left)
@@ -259,7 +263,8 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 		h, offset := shaHasher.GetState()
 		nl, nh := offset2nlnh(offset)
 		if _, err = shaHasher.Write(bytes); err != nil {
-			return err
+			gatherError = err
+			break
 		}
 
 		select {
@@ -276,14 +281,15 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 			Num:      "0",
 		}}:
 		case <-ctx.Done():
-			close(partDataChannel)
-			return gatherError
+			gatherError = ctx.Err()
+			break
 		}
 		partNumber++
 	}
 	close(partDataChannel)
 	wg.Wait()
 	close(partReturnChannel)
+	gatherWg.Wait()
 	log.Infof("file %s gather finish, error: %v", stream.GetName(), gatherError)
 	if gatherError != nil {
 		return gatherError

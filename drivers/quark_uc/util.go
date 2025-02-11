@@ -66,9 +66,9 @@ func (r *ZerobyteTimeoutReader) Watch() {
 			defer r.lock.Unlock()
 			r.ctxCancelFunc()
 			r.ticker.Stop()
+			log.Info("zerobytereader watch routine end")
 			return
 		}
-		log.Info("zerobytereader watch routine end")
 	}()
 }
 
@@ -254,7 +254,7 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 	if partNumber > 1 {
 		header["x-oss-hash-ctx"] = ossHashBase64
 	}
-	log.Info("partNumber: %d, ctx: %s", partNumber, ossHashBase64)
+	log.Infof("partNumber: %d, ctx: %s", partNumber, ossHashBase64)
 	u := fmt.Sprintf("https://%s.%s/%s", pre.Data.Bucket, pre.Data.UploadUrl[7:], pre.Data.ObjKey)
 	zerobyteReader := NewZerobyteTimeoutReader(bytes.NewReader(dataBytes), 20*time.Second, ctx)
 	zerobyteReader.Watch()
