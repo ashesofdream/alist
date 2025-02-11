@@ -1,7 +1,6 @@
 package quark
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -80,7 +79,8 @@ func init() {
 	uploadClient = resty.New().
 		SetHeader("user-agent", base.UserAgent).
 		SetRetryCount(3).
-		SetRetryResetReaders(true)
+		SetRetryResetReaders(true).
+		SetTimeout(5 * time.Minute)
 }
 func (d *QuarkOrUC) uploadRequest(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	u := d.conf.api + pathname
@@ -260,14 +260,12 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 	}
 	log.Infof("partNumber: %d, ctx: %s", partNumber, ossHashBase64)
 	u := fmt.Sprintf("https://%s.%s/%s", pre.Data.Bucket, pre.Data.UploadUrl[7:], pre.Data.ObjKey)
-	zerobyteReader := NewZerobyteTimeoutReader(bytes.NewReader(dataBytes), 20*time.Second, ctx)
-	zerobyteReader.Watch()
-	res, err := uploadClient.R().SetContext(zerobyteReader.timeoutCtx).
+	res, err := uploadClient.R().SetContext(ctx).
 		SetHeaders(header).
 		SetQueryParams(map[string]string{
 			"partNumber": strconv.Itoa(partNumber),
 			"uploadId":   pre.Data.UploadId,
-		}).SetBody(zerobyteReader).Put(u)
+		}).SetBody(dataBytes).Put(u)
 	if res.StatusCode() == 409 {
 		var result = OssErrorBody{}
 		err := xml.Unmarshal(res.Body(), &result)
