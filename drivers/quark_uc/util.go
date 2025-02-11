@@ -50,8 +50,9 @@ func (r *ZerobyteTimeoutReader) Read(p []byte) (n int, err error) {
 	if utils.IsCanceled(r.timeoutCtx) {
 		return 0, io.EOF
 	}
-	r.ticker.Reset(r.timeout)
 	n, err = r.Reader.Read(p)
+	log.Infof("zerobytereader read %d bytes, err %v", n, err)
+	r.ticker.Reset(r.timeout)
 	return n, err
 }
 
@@ -70,6 +71,9 @@ func (r *ZerobyteTimeoutReader) Watch() {
 			return
 		}
 	}()
+}
+func (r *ZerobyteTimeoutReader) Ctx() context.Context {
+	return r.timeoutCtx
 }
 
 func init() {
@@ -258,7 +262,7 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 	u := fmt.Sprintf("https://%s.%s/%s", pre.Data.Bucket, pre.Data.UploadUrl[7:], pre.Data.ObjKey)
 	zerobyteReader := NewZerobyteTimeoutReader(bytes.NewReader(dataBytes), 20*time.Second, ctx)
 	zerobyteReader.Watch()
-	res, err := uploadClient.R().SetContext(ctx).
+	res, err := uploadClient.R().SetContext(zerobyteReader.timeoutCtx).
 		SetHeaders(header).
 		SetQueryParams(map[string]string{
 			"partNumber": strconv.Itoa(partNumber),
