@@ -193,7 +193,8 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 	if stream.GetSize()%int64(pre.Metadata.PartSize) == 0 {
 		md5s = md5s[:len(md5s)-1]
 	}
-	for i := 0; i < pre.Metadata.PartThread; i++ {
+	max_thread := max(pre.Metadata.PartThread, 2)
+	for i := 0; i < max_thread; i++ {
 		wg.Add(1)
 		go d.PutWokrer(stream.GetName()+" upload worker_"+strconv.Itoa(i), partDataChannel, partReturnChannel, &wg, ctx, &pre, stream)
 	}
