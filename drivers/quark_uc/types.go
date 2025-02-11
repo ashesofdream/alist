@@ -1,6 +1,7 @@
 package quark
 
 import (
+	"encoding/xml"
 	"time"
 
 	"github.com/alist-org/alist/v3/internal/model"
@@ -147,4 +148,29 @@ type UpAuthResp struct {
 	} `json:"data"`
 	Metadata struct {
 	} `json:"metadata"`
+}
+
+type OssErrorBody struct {
+	XMLName      xml.Name `xml:"Error"`        // 根节点名称
+	Code         string   `xml:"Code"`         // <Code> 标签
+	Message      string   `xml:"Message"`      // <Message> 标签
+	RequestId    string   `xml:"RequestId"`    // <RequestId> 标签
+	HostId       string   `xml:"HostId"`       // <HostId> 标签
+	PartEtag     string   `xml:"PartEtag"`     // <PartEtag> 标签
+	PartNumber   int      `xml:"PartNumber"`   // <PartNumber> 标签
+	EC           string   `xml:"EC"`           // <EC> 标签
+	RecommendDoc string   `xml:"RecommendDoc"` // <RecommendDoc> 标签
+}
+
+type OssHashContext struct {
+	HashType string `json:"hash_type"`
+	H0       string `json:"h0"`
+	H1       string `json:"h1"`
+	H2       string `json:"h2"`
+	H3       string `json:"h3"`
+	H4       string `json:"h4"`
+	Nl       string `json:"Nl"`
+	Nh       string `json:"Nh"`
+	Data     string `json:"data"`
+	Num      string `json:"num"`
 }
