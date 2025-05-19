@@ -3,6 +3,7 @@ package net
 import (
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"mime"
@@ -14,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alist-org/alist/v3/drivers/base"
 	"github.com/alist-org/alist/v3/internal/conf"
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/pkg/http_range"
@@ -52,19 +52,19 @@ import (
 //
 // If the caller has set w's ETag header formatted per RFC 7232, section 2.3,
 // ServeHTTP uses it to handle requests using If-Match, If-None-Match, or If-Range.
-func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time.Time, size int64, RangeReadCloser model.RangeReadCloserIF) {
+func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time.Time, size int64, RangeReadCloser model.RangeReadCloserIF) error {
 	defer RangeReadCloser.Close()
 	setLastModified(w, modTime)
 	done, rangeReq := checkPreconditions(w, r, modTime)
 	if done {
-		return
+		return nil
 	}
 
 	if size < 0 {
 		// since too many functions need file size to work,
 		// will not implement the support of unknown file size here
 		http.Error(w, "negative content size not supported", http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	code := http.StatusOK
@@ -103,7 +103,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time
 		fallthrough
 	default:
 		http.Error(w, err.Error(), http.StatusRequestedRangeNotSatisfiable)
-		return
+		return nil
 	}
 
 	if sumRangesSize(ranges) > size {
@@ -114,7 +114,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time
 
 	// 使用请求的Context
 	// 不然从sendContent读不到数据，即使请求断开CopyBuffer也会一直堵塞
-	ctx := r.Context()
+	ctx := context.WithValue(r.Context(), "request_header", r.Header)
 	switch {
 	case len(ranges) == 0:
 		reader, err := RangeReadCloser.RangeRead(ctx, http_range.Range{Length: -1})
@@ -124,7 +124,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time
 				code = http.StatusTooManyRequests
 			}
 			http.Error(w, err.Error(), code)
-			return
+			return nil
 		}
 		sendContent = reader
 	case len(ranges) == 1:
@@ -147,7 +147,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time
 				code = http.StatusTooManyRequests
 			}
 			http.Error(w, err.Error(), code)
-			return
+			return nil
 		}
 		sendSize = ra.Length
 		code = http.StatusPartialContent
@@ -205,9 +205,11 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, name string, modTime time
 			if err == ErrExceedMaxConcurrency {
 				code = http.StatusTooManyRequests
 			}
-			http.Error(w, err.Error(), code)
+			w.WriteHeader(code)
+			return err
 		}
 	}
+	return nil
 }
 func ProcessHeader(origin, override http.Header) http.Header {
 	result := http.Header{}
@@ -264,7 +266,7 @@ var httpClient *http.Client
 
 func HttpClient() *http.Client {
 	once.Do(func() {
-		httpClient = base.NewHttpClient()
+		httpClient = NewHttpClient()
 		httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
@@ -274,4 +276,14 @@ func HttpClient() *http.Client {
 		}
 	})
 	return httpClient
+}
+
+func NewHttpClient() *http.Client {
+	return &http.Client{
+		Timeout: time.Hour * 48,
+		Transport: &http.Transport{
+			Proxy:           http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: conf.Conf.TlsInsecureSkipVerify},
+		},
+	}
 }

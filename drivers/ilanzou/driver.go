@@ -2,11 +2,9 @@ package template
 
 import (
 	"context"
-	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/alist-org/alist/v3/internal/stream"
 	"io"
 	"net/http"
 	"net/url"
@@ -18,6 +16,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/stream"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/foxxorcat/mopan-sdk-go"
 	"github.com/go-resty/resty/v2"
@@ -121,7 +120,7 @@ func (d *ILanZou) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	if err != nil {
 		return nil, err
 	}
-	ts, ts_str, err := getTimestamp(d.conf.secret)
+	ts, ts_str, _ := getTimestamp(d.conf.secret)
 
 	params := []string{
 		"uuid=" + url.QueryEscape(d.UUID),
@@ -150,11 +149,17 @@ func (d *ILanZou) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	u.RawQuery = strings.Join(params, "&")
 	realURL := u.String()
 	// get the url after redirect
-	res, err := base.NoRedirectClient.R().SetHeaders(map[string]string{
-		//"Origin":  d.conf.site,
+	req := base.NoRedirectClient.R()
+
+	req.SetHeaders(map[string]string{
 		"Referer":    d.conf.site + "/",
 		"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
-	}).Get(realURL)
+	})
+	if d.Addition.Ip != "" {
+		req.SetHeader("X-Forwarded-For", d.Addition.Ip)
+	}
+
+	res, err := req.Get(realURL)
 	if err != nil {
 		return nil, err
 	}
@@ -268,23 +273,14 @@ func (d *ILanZou) Remove(ctx context.Context, obj model.Obj) error {
 const DefaultPartSize = 1024 * 1024 * 8
 
 func (d *ILanZou) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer, up driver.UpdateProgress) (model.Obj, error) {
-	h := md5.New()
-	// need to calculate md5 of the full content
-	tempFile, err := s.CacheFullInTempFile()
-	if err != nil {
-		return nil, err
+	etag := s.GetHash().GetHash(utils.MD5)
+	var err error
+	if len(etag) != utils.MD5.Width {
+		_, etag, err = stream.CacheFullInTempFileAndHash(s, utils.MD5)
+		if err != nil {
+			return nil, err
+		}
 	}
-	defer func() {
-		_ = tempFile.Close()
-	}()
-	if _, err = utils.CopyWithBuffer(h, tempFile); err != nil {
-		return nil, err
-	}
-	_, err = tempFile.Seek(0, io.SeekStart)
-	if err != nil {
-		return nil, err
-	}
-	etag := hex.EncodeToString(h.Sum(nil))
 	// get upToken
 	res, err := d.proved("/7n/getUpToken", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(base.Json{
@@ -302,13 +298,13 @@ func (d *ILanZou) Put(ctx context.Context, dstDir model.Obj, s model.FileStreame
 	upToken := utils.Json.Get(res, "upToken").ToString()
 	now := time.Now()
 	key := fmt.Sprintf("disk/%d/%d/%d/%s/%016d", now.Year(), now.Month(), now.Day(), d.account, now.UnixMilli())
-	reader := &stream.ReaderUpdatingProgress{
-		Reader: &stream.SimpleReaderWithSize{
-			Reader: tempFile,
+	reader := driver.NewLimitedUploadStream(ctx, &driver.ReaderUpdatingProgress{
+		Reader: &driver.SimpleReaderWithSize{
+			Reader: s,
 			Size:   s.GetSize(),
 		},
 		UpdateProgress: up,
-	}
+	})
 	var token string
 	if s.GetSize() <= DefaultPartSize {
 		res, err := d.upClient.R().SetContext(ctx).SetMultipartFormData(map[string]string{

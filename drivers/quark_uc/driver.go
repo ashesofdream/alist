@@ -1,11 +1,10 @@
 package quark
 
 import (
+	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
 	"encoding/hex"
-	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
+	streamPkg "github.com/alist-org/alist/v3/internal/stream"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
@@ -77,7 +77,7 @@ func (d *QuarkOrUC) Link(ctx context.Context, file model.Obj, args model.LinkArg
 			"Referer":    []string{d.conf.referer},
 			"User-Agent": []string{ua},
 		},
-		Concurrency: 2,
+		Concurrency: 3,
 		PartSize:    10 * utils.MB,
 	}, nil
 }
@@ -139,37 +139,33 @@ func (d *QuarkOrUC) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	log.Infof("quark upload %s:cache fill to temp file", stream.GetName())
-	tempFile, err := stream.CacheFullInTempFile()
-	if err != nil {
-		return err
+	md5Str, sha1Str := stream.GetHash().GetHash(utils.MD5), stream.GetHash().GetHash(utils.SHA1)
+	var (
+		md5  hash.Hash
+		sha1 hash.Hash
+	)
+	writers := []io.Writer{}
+	if len(md5Str) != utils.MD5.Width {
+		md5 = utils.MD5.NewFunc()
+		writers = append(writers, md5)
 	}
-	defer func() {
-		_ = tempFile.Close()
-	}()
-	log.Infof("quark upload %s:calculate md5", stream.GetName())
-	m := md5.New()
-	_, err = utils.CopyWithBuffer(m, tempFile)
-	if err != nil {
-		return err
+	if len(sha1Str) != utils.SHA1.Width {
+		sha1 = utils.SHA1.NewFunc()
+		writers = append(writers, sha1)
 	}
-	_, err = tempFile.Seek(0, io.SeekStart)
-	if err != nil {
-		return err
+
+	if len(writers) > 0 {
+		_, err := streamPkg.CacheFullInTempFileAndWriter(stream, io.MultiWriter(writers...))
+		if err != nil {
+			return err
+		}
+		if md5 != nil {
+			md5Str = hex.EncodeToString(md5.Sum(nil))
+		}
+		if sha1 != nil {
+			sha1Str = hex.EncodeToString(sha1.Sum(nil))
+		}
 	}
-	md5Str := hex.EncodeToString(m.Sum(nil))
-	log.Infof("quark upload %s:calculate sha1", stream.GetName())
-	s := sha1.New()
-	_, err = utils.CopyWithBuffer(s, tempFile)
-	if err != nil {
-		return err
-	}
-	_, err = tempFile.Seek(0, io.SeekStart)
-	if err != nil {
-		return err
-	}
-	sha1Str := hex.EncodeToString(s.Sum(nil))
-	log.Infof("quark upload %s:pre", stream.GetName())
 	// pre
 	pre, err := d.upPre(stream, dstDir.GetID())
 	if err != nil {
@@ -237,10 +233,15 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 		}
 	}()
 	// part up
-	partSize := pre.Metadata.PartSize
-	var bytes []byte
 	total := stream.GetSize()
 	left := total
+	partSize := int64(pre.Metadata.PartSize)
+	part := make([]byte, partSize)
+	count := int(total / partSize)
+	if total%partSize > 0 {
+		count++
+	}
+	md5s := make([]string, 0, count)
 	partNumber := 1
 	shaHasher := NewSHA1()
 	defer gatherCancel()
@@ -248,43 +249,26 @@ func (d *QuarkOrUC) Put(ctx context.Context, dstDir model.Obj, stream model.File
 		if utils.IsCanceled(ctx) {
 			return ctx.Err()
 		}
-		if left > int64(partSize) {
-			bytes = make([]byte, partSize)
-		} else {
-			bytes = make([]byte, left)
+		if left < partSize {
+			part = part[:left]
 		}
-		_, err := io.ReadFull(tempFile, bytes)
+		n, err := io.ReadFull(stream, part)
 		if err != nil {
 			gatherError = err
 			break
 		}
-		left -= int64(len(bytes))
+		left -= int64(n)
 		log.Debugf("left: %d", left)
-		// get last state before write
-		h, offset := shaHasher.GetState()
-		nl, nh := offset2nlnh(offset)
-		if _, err = shaHasher.Write(bytes); err != nil {
-			gatherError = err
-			break
+		reader := driver.NewLimitedUploadStream(ctx, bytes.NewReader(part))
+		m, err := d.upPart(ctx, pre, stream.GetMimetype(), partNumber, reader)
+		//m, err := driver.UpPart(pre, file.GetMIMEType(), partNumber, bytes, account, md5Str, sha1Str)
+		if err != nil {
+			return err
 		}
-
-		select {
-		case partDataChannel <- &PartData{data: bytes, partNum: partNumber, hashContext: OssHashContext{
-			HashType: "sha1",
-			H0:       strconv.FormatUint(uint64(h[0]), 10),
-			H1:       strconv.FormatUint(uint64(h[1]), 10),
-			H2:       strconv.FormatUint(uint64(h[2]), 10),
-			H3:       strconv.FormatUint(uint64(h[3]), 10),
-			H4:       strconv.FormatUint(uint64(h[4]), 10),
-			Nl:       strconv.FormatUint(uint64(nl), 10),
-			Nh:       strconv.FormatUint(uint64(nh), 10),
-			Data:     "",
-			Num:      "0",
-		}}:
-		case <-ctx.Done():
-			gatherError = ctx.Err()
-			break
+		if m == "finish" {
+			return nil
 		}
+		md5s = append(md5s, m)
 		partNumber++
 	}
 	close(partDataChannel)

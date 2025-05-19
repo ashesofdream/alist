@@ -213,7 +213,7 @@ func (d *QuarkOrUC) upHash(md5, sha1, taskId string) (bool, error) {
 	return resp.Data.Finish, err
 }
 
-func (d *QuarkOrUC) upPart(ctx context.Context, pre UpPreResp, mineType string, partNumber int, dataBytes []byte, hashCtx *OssHashContext) (string, error) {
+func (d *QuarkOrUC) upPart(ctx context.Context, pre UpPreResp, mineType string, partNumber int, bytes io.Reader) (string, error) {
 	//func (driver QuarkOrUC) UpPart(pre UpPreResp, mineType string, partNumber int, bytes []byte, account *model.Account, md5Str, sha1Str string) (string, error) {
 	timeStr := time.Now().UTC().Format(http.TimeFormat)
 	hash := md5.Sum(dataBytes)
@@ -265,22 +265,14 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 		SetQueryParams(map[string]string{
 			"partNumber": strconv.Itoa(partNumber),
 			"uploadId":   pre.Data.UploadId,
-		}).SetBody(dataBytes).Put(u)
-	if res.StatusCode() == 409 {
-		var result = OssErrorBody{}
-		err := xml.Unmarshal(res.Body(), &result)
-		if err != nil {
-			return "", fmt.Errorf("up status: %d, error: %s,unmarshal xml error: %s", res.StatusCode(), res.String(), err.Error())
-		}
-		if result.Code == "PartAlreadyExist" && result.PartEtag == hashHex {
-			log.Debugf("part already exist, skip,Etag: %s", result.PartEtag)
-			return result.PartEtag, nil
-		}
+		}).SetBody(bytes).Put(u)
+	if err != nil {
+		return "", err
 	}
 	if res.StatusCode() != 200 {
 		return "", fmt.Errorf("up status: %d,Remote Etag: %s, True Etag: %s, error: %s", res.StatusCode(), res.Header().Get("ETag"), hashHex, res.String())
 	}
-	return res.Header().Get("ETag"), nil
+	return res.Header().Get("Etag"), nil
 }
 
 func (d *QuarkOrUC) upCommit(pre UpPreResp, md5s []string) error {
@@ -345,6 +337,9 @@ x-oss-user-agent:aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit
 		SetQueryParams(map[string]string{
 			"uploadId": pre.Data.UploadId,
 		}).SetBody(body).Post(u)
+	if err != nil {
+		return err
+	}
 	if res.StatusCode() != 200 {
 		return fmt.Errorf("up status: %d, error: %s", res.StatusCode(), res.String())
 	}

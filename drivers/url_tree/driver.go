@@ -3,7 +3,6 @@ package url_tree
 import (
 	"context"
 	"errors"
-	"github.com/alist-org/alist/v3/internal/op"
 	stdpath "path"
 	"strings"
 	"sync"
@@ -11,6 +10,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/errs"
 	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/op"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
@@ -243,7 +243,25 @@ func (d *Urls) PutURL(ctx context.Context, dstDir model.Obj, name, url string) (
 }
 
 func (d *Urls) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
-	return errs.UploadNotSupported
+	if !d.Writable {
+		return errs.PermissionDenied
+	}
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	node := GetNodeFromRootByPath(d.root, dstDir.GetPath()) // parent
+	if node == nil {
+		return errs.ObjectNotFound
+	}
+	if node.isFile() {
+		return errs.NotFolder
+	}
+	file, err := parseFileLine(stream.GetName(), d.HeadSize)
+	if err != nil {
+		return err
+	}
+	node.Children = append(node.Children, file)
+	d.updateStorage()
+	return nil
 }
 
 func (d *Urls) updateStorage() {
